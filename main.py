@@ -45,13 +45,13 @@ processor = AutoProcessor.from_pretrained(
 try:
     model = AutoModelForCausalLM.from_pretrained(
         "weights/icon_caption_florence",
-        torch_dtype=torch.float16,
+        torch_dtype=torch.float32,  # Changed to float32
         trust_remote_code=True,
     ).to("cuda")
 except:
     model = AutoModelForCausalLM.from_pretrained(
         "weights/icon_caption_florence",
-        torch_dtype=torch.float16,
+        torch_dtype=torch.float32,  # Changed to float32
         trust_remote_code=True,
     )
 caption_model_processor = {"processor": processor, "model": model}
@@ -65,8 +65,61 @@ class ProcessResponse(BaseModel):
     parsed_content_list: str
     label_coordinates: str
 
-
 def process(
+    image_input: Image.Image, box_threshold: float, iou_threshold: float
+) -> ProcessResponse:
+    image_save_path = "imgs/saved_image_demo.png"
+    image_input.save(image_save_path)
+    image = Image.open(image_save_path)
+    box_overlay_ratio = image.size[0] / 3200
+    draw_bbox_config = {
+        "text_scale": 0.8 * box_overlay_ratio,
+        "text_thickness": max(int(2 * box_overlay_ratio), 1),
+        "text_padding": max(int(3 * box_overlay_ratio), 1),
+        "thickness": max(int(3 * box_overlay_ratio), 1),
+    }
+
+    ocr_bbox_rslt, is_goal_filtered = check_ocr_box(
+        image_save_path,
+        display_img=False,
+        output_bb_format="xyxy",
+        goal_filtering=None,
+        easyocr_args={"paragraph": False, "text_threshold": 0.9},
+        use_paddleocr=True,
+    )
+    text, ocr_bbox = ocr_bbox_rslt
+    dino_labled_img, label_coordinates, parsed_content_list = get_som_labeled_img(
+        image_save_path,
+        yolo_model,
+        BOX_TRESHOLD=box_threshold,
+        output_coord_in_ratio=True,
+        ocr_bbox=ocr_bbox,
+        draw_bbox_config=draw_bbox_config,
+        caption_model_processor=caption_model_processor,
+        ocr_text=text,
+        iou_threshold=iou_threshold,
+    )
+
+    # Image processing
+    image = Image.open(io.BytesIO(base64.b64decode(dino_labled_img)))
+    print("finish processing")
+    parsed_content_list_str = "\n".join(parsed_content_list)
+
+    # Encode image to base64
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    return ProcessResponse(
+        image=img_str,
+        parsed_content_list=str(parsed_content_list_str),
+        label_coordinates=str(label_coordinates),
+    )
+
+
+
+
+'''def process(
     image_input: Image.Image, box_threshold: float, iou_threshold: float
 ) -> ProcessResponse:
     image_save_path = "imgs/saved_image_demo.png"
@@ -114,7 +167,7 @@ def process(
         parsed_content_list=str(parsed_content_list_str),
         label_coordinates=str(label_coordinates),
     )
-
+'''
 
 @app.post("/process_image", response_model=ProcessResponse)
 async def process_image(
